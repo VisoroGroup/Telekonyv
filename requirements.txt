@@ -1,0 +1,8 @@
+pypdf==6.4.0
+openpyxl
+pandas
+pdf2image
+Pillow
+pytesseract
+flask
+tqdm
