@@ -1,0 +1,302 @@
+import re
+from typing import List, Dict, Tuple
+
+def clean_text(text: str) -> str:
+    """Standardize text for easier regex matching."""
+    if not text: return ""
+    text = text.replace('\r', '')
+    text = text.replace('ţ', 't').replace('ş', 's').replace('ă', 'a').replace('î', 'i').replace('â', 'a')
+    text = text.replace('Ţ', 'T').replace('Ş', 'S').replace('Ă', 'A').replace('Î', 'I').replace('Â', 'A')
+    text = re.sub(r'[ \t]+', ' ', text)
+    return text
+
+def extract_cf_number(text: str) -> str:
+    match = re.search(r"CARTE\s+FUNCIAR[AĂ]\s+NR\.?\s+(\d+)", text, re.IGNORECASE)
+    return match.group(1) if match else "Nedetectat"
+
+def extract_uat_locality(text: str) -> Tuple[str, str]:
+    """Extracts UAT and Locality from header."""
+    uat = ""
+    localitate = ""
+    
+    uat_match = re.search(r"(?:UAT|Comuna|Oras|Municipiu)[:\s]+([A-Z][a-zA-Z\s\-]+)", text)
+    if uat_match:
+        uat = uat_match.group(1).strip()
+    
+    loc_match = re.search(r"Loc\.\s*([A-Z][a-zA-Z\s\-]+)", text)
+    if loc_match:
+        localitate = loc_match.group(1).strip()
+    
+    return uat, localitate
+
+def extract_cadastral_number(text: str) -> str:
+    # Matches A1 followed by number, IGNORING quotes/commas
+    a1_match = re.search(r"\bA1[^\d\n]*([0-9\-/]+)", text)
+    if a1_match:
+        return a1_match.group(1)
+    
+    cad_match = re.search(r"Nr\.?\s*(?:cadastral|topografic).*?(\d+[0-9\-/]*)", text, re.IGNORECASE)
+    if cad_match:
+        if "vechi" not in cad_match.group(0).lower():
+            return cad_match.group(1)
+    return "Nedetectat"
+
+def extract_owner_details(text: str) -> Tuple[str, str, str, str]:
+    """
+    Extracts Owner Name, Quota, Mode of Acquisition, and Act.
+    """
+    part_ii_match = re.search(r"B\.\s*Partea\s+II.*?(?=C\.\s*Partea|Anexa|SARCINI)", text, re.IGNORECASE | re.DOTALL)
+    if not part_ii_match:
+        return "Fara proprietar identificat", "", "", ""
+    
+    part_ii = part_ii_match.group(0)
+    
+    if "proprietar neidentificat" in part_ii.lower():
+        return "Proprietar neidentificat", "1/1", "Lege", ""
+
+    # 1. Extract Owner Names
+    owners = []
+    pattern = r"(?:^|\s|\n)(\d+)\)\s*([A-ZĂÂÎȘŢ\-\s]+?)(?=\,|\;|\s+soti|\s+bun|\s+cota|\s+incheierea|\s+Act|\s+Imobil|\s+Intabulare|\s+necasatorit|\s+casatorit|\s+vaduva|[\r\n]|$)"
+    matches = re.findall(pattern, part_ii)
+    
+    if matches:
+        last_match = matches[-1]
+        last_index = int(last_match[0])
+        for i, name in reversed(matches):
+            current_idx = int(i)
+            if current_idx <= last_index and len(owners) < 2: 
+                clean_name = name.strip()
+                if len(clean_name) > 3 and "INTABULARE" not in clean_name:
+                    owners.append(clean_name)
+            else:
+                break
+    
+    owner_str = " & ".join(reversed(owners)) if owners else "Nedetectat"
+
+    # 2. Extract Cota
+    cota = ""
+    cota_match = re.search(r"cota\s+(?:actuala\s+)?(\d+/\d+)", part_ii, re.IGNORECASE)
+    if cota_match:
+        cota = cota_match.group(1)
+
+    # 3. Extract Acquisition Mode
+    mod = ""
+    if "vanzare" in part_ii.lower() or "cumparare" in part_ii.lower(): mod = "Cumparare"
+    elif "donatie" in part_ii.lower(): mod = "Donatie"
+    elif "mostenire" in part_ii.lower() or "succesiune" in part_ii.lower(): mod = "Mostenire"
+    elif "reconstituire" in part_ii.lower(): mod = "Reconstituire"
+    elif "lege" in part_ii.lower(): mod = "Lege"
+    elif "intretinere" in part_ii.lower(): mod = "Intretinere"
+
+    # 4. Act
+    act = ""
+    act_match = re.search(r"(Act\s+(?:Notarial|Administrativ|Judecatoresc)[^\n]+)", part_ii, re.IGNORECASE)
+    if act_match:
+        act = act_match.group(1).strip()[:50] 
+
+    return owner_str, cota, mod, act
+
+def extract_sarcini(text: str) -> str:
+    """Extracts Encumbrances (Part III)."""
+    part_iii_match = re.search(r"C\.\s*Partea\s+III.*?(?=Anexa|Certificat|\Z)", text, re.IGNORECASE | re.DOTALL)
+    if not part_iii_match:
+        return ""
+    
+    part_iii = part_iii_match.group(0)
+    if "NU SUNT" in part_iii:
+        return "NU SUNT"
+    
+    sarcini = []
+    if "IPOTECA" in part_iii.upper():
+        bank = re.search(r"(?:Banca|BCR|BRD|CEC|Raiffeisen|ING)[^\n]*", part_iii, re.IGNORECASE)
+        if bank:
+            sarcini.append(f"Ipoteca: {bank.group(0).strip()}")
+        else:
+            sarcini.append("Ipoteca")
+            
+    if "UZUFRUCT" in part_iii.upper():
+        sarcini.append("Uzufruct")
+        
+    return "; ".join(sarcini)
+
+def extract_parcel_data(text: str) -> Tuple[str, str, str]:
+    """Extracts Measured Surface, Document Surface, and Terrain Obs."""
+    measured = ""
+    doc_surf = ""
+    obs = ""
+
+    # Obs
+    if re.search(r"Teren\s+neimprejmuit", text, re.IGNORECASE): obs = "Teren neimprejmuit"
+    elif re.search(r"Teren\s+imprejmuit", text, re.IGNORECASE): obs = "Teren imprejmuit"
+    
+    if not obs:
+        match = re.search(r"A1[^\w\n]+[0-9\-/]+[^\w\n]+[\d\.]+[^\w\n]+(.*?)(?=\s+Adresa|\s+Jud\.|\s+B\.|\s+Partea|\Z)", text, re.DOTALL)
+        if match:
+            raw_obs = match.group(1).strip().replace(';', '').replace('"', '')
+            if len(raw_obs) < 50: obs = raw_obs
+
+    # Surfaces
+    masurata = re.search(r"Masurata:?\s*(\d+[\.\s]?\d*)", text, re.IGNORECASE)
+    if masurata: measured = masurata.group(1).replace('.', '').replace(' ', '')
+
+    din_acte = re.search(r"Din\s+acte:?\s*(\d+[\.\s]?\d*)", text, re.IGNORECASE)
+    if din_acte: doc_surf = din_acte.group(1).replace('.', '').replace(' ', '')
+
+    if not measured:
+        table_match = re.search(r"A1[^\d\n]+[0-9\-/]+[^\d\n]+(\d{1,3}(?:\.\d{3})*)", text)
+        if table_match: measured = table_match.group(1).replace('.', '')
+
+    return measured, doc_surf, obs
+
+def extract_constructions(text: str, cad_base: str) -> List[Dict]:
+    buildings = []
+    
+    section_match = re.search(
+        r"(?:Date\s+referitoare\s+la\s+construc[tț]ii|Construc[tț]ii)(.*?)(?=Lungime\s+Segmente|B\.\s*Partea|Date\s+referitoare\s+la\s+teren|\Z)", 
+        text, 
+        re.DOTALL | re.IGNORECASE
+    )
+    
+    if not section_match:
+        return []
+
+    block = section_match.group(1)
+    parts = re.split(r"(\d+-C\d+)", block)
+    
+    if len(parts) < 2: return []
+
+    for i in range(1, len(parts), 2):
+        full_id = parts[i]
+        data_chunk = parts[i+1]
+        
+        cid = full_id.split('-')[1] # C1
+        
+        surface = ""
+        explicit_surf = re.search(r"S\.\s*construita[^:]*:?\s*(\d+)", data_chunk, re.IGNORECASE)
+        if explicit_surf:
+            surface = explicit_surf.group(1)
+        else:
+            nums = re.findall(r"\b(\d{2,5})\b", data_chunk)
+            for n in nums:
+                if not (1900 < int(n) < 2030): surface = n; break
+
+        surf_desf = ""
+        desf_match = re.search(r"desfasurata:?\s*(\d+)", data_chunk, re.IGNORECASE)
+        if desf_match: surf_desf = desf_match.group(1)
+
+        dest = "Cladire"
+        if "locuinta" in data_chunk.lower(): dest = "Locuinta"
+        elif "anexa" in data_chunk.lower(): dest = "Anexa"
+        elif "garaj" in data_chunk.lower(): dest = "Garaj"
+        elif "magazie" in data_chunk.lower(): dest = "Magazie"
+
+        year_match = re.search(r"\b(19\d{2}|20\d{2})\b", data_chunk)
+        year = year_match.group(1) if year_match else ""
+
+        material = ""
+        if "beton" in data_chunk.lower(): material = "Beton"
+        elif "caramida" in data_chunk.lower(): material = "Caramida"
+        elif "lemn" in data_chunk.lower(): material = "Lemn"
+        elif "paianta" in data_chunk.lower(): material = "Paianta"
+
+        obs = ""
+        floor_match = re.search(r"\b((?:S\+)?P(?:\+\d+)?(?:\+M)?)\b", data_chunk, re.IGNORECASE)
+        if floor_match:
+            obs = floor_match.group(1)
+        
+        nr_niv = ""
+        niv_match = re.search(r"Nr\.\s*niveluri:?\s*(\d+)", data_chunk, re.IGNORECASE)
+        if niv_match: nr_niv = niv_match.group(1)
+
+        buildings.append({
+            "nr": cid,
+            "destinatie": dest,
+            "surface": surface,
+            "surface_desf": surf_desf,
+            "year": year,
+            "material": material,
+            "obs": obs,
+            "nr_niv": nr_niv
+        })
+
+    return buildings
+
+def parse_record(filename: str, text: str) -> List[Dict]:
+    """Main Orchestrator."""
+    clean_txt = clean_text(text)
+    
+    cf_num = extract_cf_number(clean_txt)
+    cad_num = extract_cadastral_number(clean_txt)
+    uat, loc = extract_uat_locality(clean_txt)
+    owner, cota, mod, act = extract_owner_details(clean_txt)
+    surf_meas, surf_doc, terrain_obs = extract_parcel_data(clean_txt)
+    sarcini = extract_sarcini(clean_txt)
+    buildings = extract_constructions(clean_txt, cad_num)
+    
+    cerere = ""
+    cerere_match = re.search(r"Cerere\s+nr\.\s*(\d+)", clean_txt, re.IGNORECASE)
+    if cerere_match: cerere = cerere_match.group(1)
+    
+    data_em = ""
+    date_match = re.search(r"Ziua\s+(\d{2})\s+Luna\s+(\d{2})\s+Anul\s+(\d{4})", clean_txt)
+    if date_match: data_em = f"{date_match.group(1)}/{date_match.group(2)}/{date_match.group(3)}"
+
+    records = []
+    
+    if buildings:
+        for b in buildings:
+            records.append({
+                "Nume_Fisier": filename,
+                "Numar_CF": cf_num,
+                "UAT": uat,
+                "Localitate": loc,
+                "Numar_Cadastral": f"{cad_num}-{b['nr']}",
+                "Numar_Topografic": "",
+                "Adresa_Imobil": f"{loc}, {uat}",
+                "Suprafata_Masurata_MP": surf_meas,
+                "Suprafata_Din_Act_MP": surf_doc,
+                "Observatii_Teren": terrain_obs,
+                "Nr_Constructie": b['nr'],
+                "Destinatie_Constructie": b['destinatie'],
+                "Suprafata_Construita_MP": b['surface'],
+                "Suprafata_Desfasurata_MP": b['surface_desf'],
+                "An_Constructie": b['year'],
+                "Nr_Niveluri": b['nr_niv'],
+                "Observatii_Constructie": b['obs'],
+                "Proprietari": owner,
+                "Cota_Proprietate": cota,
+                "Mod_Dobandire": mod,
+                "Act_Proprietate": act,
+                "Sarcini": sarcini,
+                "Data_Emitere_Extras": data_em,
+                "Numar_Cerere": cerere
+            })
+    else:
+        records.append({
+            "Nume_Fisier": filename,
+            "Numar_CF": cf_num,
+            "UAT": uat,
+            "Localitate": loc,
+            "Numar_Cadastral": cad_num,
+            "Numar_Topografic": "",
+            "Adresa_Imobil": f"{loc}, {uat}",
+            "Suprafata_Masurata_MP": surf_meas,
+            "Suprafata_Din_Act_MP": surf_doc,
+            "Observatii_Teren": terrain_obs,
+            "Nr_Constructie": "",
+            "Destinatie_Constructie": "",
+            "Suprafata_Construita_MP": "",
+            "Suprafata_Desfasurata_MP": "",
+            "An_Constructie": "",
+            "Nr_Niveluri": "",
+            "Observatii_Constructie": "",
+            "Proprietari": owner,
+            "Cota_Proprietate": cota,
+            "Mod_Dobandire": mod,
+            "Act_Proprietate": act,
+            "Sarcini": sarcini,
+            "Data_Emitere_Extras": data_em,
+            "Numar_Cerere": cerere
+        })
+        
+    return records
