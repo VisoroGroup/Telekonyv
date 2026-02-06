@@ -6,3 +6,4 @@ Pillow
 pytesseract
 flask
 tqdm
+gunicorn
