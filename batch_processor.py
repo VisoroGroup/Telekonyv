@@ -280,10 +280,14 @@ _processor_thread: Optional[threading.Thread] = None
 
 
 def get_processor(input_dir: Path, output_dir: Path) -> BatchProcessor:
-    """Get or create processor instance."""
+    """Get or create processor instance. Creates new if input dir changed."""
     global _processor
-    if _processor is None:
-        _processor = BatchProcessor(input_dir, output_dir)
+    input_path = Path(input_dir)
+    
+    # Create new processor if none exists or input dir changed
+    if _processor is None or _processor.input_dir != input_path:
+        _processor = BatchProcessor(input_path, output_dir)
+    
     return _processor
 
 
@@ -291,15 +295,22 @@ def start_background_processing(input_dir: Path, output_dir: Path, resume: bool 
     """Start processing in background thread."""
     global _processor, _processor_thread
     
-    processor = get_processor(input_dir, output_dir)
+    # Always create new processor for the specified input dir
+    _processor = BatchProcessor(Path(input_dir), Path(output_dir))
     
-    if processor.is_running:
+    if _processor.is_running:
         return False, "Feldolgozás már folyamatban"
     
-    _processor_thread = threading.Thread(target=processor.run, args=(resume,), daemon=True)
+    # Reset if not resuming
+    if not resume:
+        _processor.reset()
+    
+    _processor_thread = threading.Thread(target=_processor.run, args=(resume,), daemon=True)
     _processor_thread.start()
     
-    return True, "Feldolgozás elindítva"
+    # Count PDFs for message
+    pdf_count = len(_processor.get_all_pdfs())
+    return True, f"Feldolgozás elindítva ({pdf_count} PDF)"
 
 
 def stop_background_processing():
@@ -309,3 +320,4 @@ def stop_background_processing():
         _processor.stop()
         return True, "Feldolgozás leállítva"
     return False, "Nincs futó feldolgozás"
+

@@ -30,20 +30,28 @@ HTML_INDEX = """
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 900px; margin: 40px auto; padding: 20px; background-color: #f9f9f9; }
         h1 { color: #2c3e50; text-align: center; }
         .container { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        .upload-area { border: 2px dashed #bdc3c7; padding: 40px; text-align: center; border-radius: 8px; margin-bottom: 20px; transition: 0.3s; }
+        .section { border: 2px solid #e0e0e0; padding: 25px; border-radius: 8px; margin-bottom: 20px; }
+        .section h3 { margin-top: 0; color: #2c3e50; }
+        .upload-area { border: 2px dashed #bdc3c7; padding: 30px; text-align: center; border-radius: 8px; transition: 0.3s; }
         .upload-area:hover { border-color: #3498db; background: #f0f8ff; }
         input[type=file] { display: none; }
+        input[type=text] { width: 100%; padding: 12px; font-size: 16px; border: 2px solid #ddd; border-radius: 5px; box-sizing: border-box; }
+        input[type=text]:focus { border-color: #3498db; outline: none; }
         .file-label { background: #3498db; color: white; padding: 12px 25px; border-radius: 5px; cursor: pointer; display: inline-block; font-weight: bold; }
         .file-label:hover { background: #2980b9; }
-        .submit-btn { background: #27ae60; color: white; padding: 15px 40px; border: none; border-radius: 5px; cursor: pointer; font-size: 18px; margin-top: 20px; width: 100%; transition: 0.3s; }
+        .submit-btn { background: #27ae60; color: white; padding: 15px 40px; border: none; border-radius: 5px; cursor: pointer; font-size: 18px; margin-top: 15px; width: 100%; transition: 0.3s; }
         .submit-btn:hover { background: #219150; }
+        .submit-btn.folder { background: #9b59b6; }
+        .submit-btn.folder:hover { background: #8e44ad; }
         .stats { color: #7f8c8d; text-align: center; margin-top: 10px; }
         .success-box { background: #d4edda; color: #155724; padding: 20px; border-radius: 8px; margin-top: 20px; text-align: center; border: 1px solid #c3e6cb; }
         .warning-box { background: #fff3cd; color: #856404; padding: 20px; border-radius: 8px; margin-top: 20px; text-align: center; border: 1px solid #ffeeba; }
+        .error-box { background: #f8d7da; color: #721c24; padding: 20px; border-radius: 8px; margin-top: 20px; text-align: center; border: 1px solid #f5c6cb; }
         .action-btn { display: inline-block; padding: 10px 20px; margin: 5px; text-decoration: none; border-radius: 5px; font-weight: bold; }
         .download-btn { background: #007bff; color: white; }
         .clear-btn { background: #dc3545; color: white; }
         .progress-btn { background: #17a2b8; color: white; }
+        .or-divider { text-align: center; margin: 20px 0; color: #999; font-weight: bold; }
         #loading { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.95); z-index: 1000; text-align: center; padding-top: 15%; }
         .spinner { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; margin: 0 auto 20px auto; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -56,40 +64,55 @@ HTML_INDEX = """
             document.getElementById('file-name').textContent = fileName;
         }
         function showLoading() {
-            var input = document.getElementById('file-input');
-            if (input.files.length > 0) {
-                document.getElementById('loading').style.display = 'block';
-                document.getElementById('loading-subtext').textContent = input.files.length + " fájl feltöltése...";
-            }
+            document.getElementById('loading').style.display = 'block';
         }
     </script>
 </head>
 <body>
     <div id="loading">
         <div class="spinner"></div>
-        <div id="loading-text">Fájlok feltöltése...</div>
-        <div id="loading-subtext">Ez eltarthat néhány percig nagy mennyiségnél.</div>
+        <div id="loading-text">Feldolgozás indul...</div>
+        <div id="loading-subtext">Kérlek várj...</div>
     </div>
 
     <h1>🏠 Telekkönyv Feldolgozó</h1>
     
     <div class="container">
-        <form method="post" enctype="multipart/form-data" onsubmit="showLoading()">
-            <div class="upload-area">
-                <label for="file-input" class="file-label">📁 PDF fájlok kiválasztása</label>
-                <input id="file-input" type="file" name="files" multiple accept=".pdf" onchange="updateFileName(this)">
-                <p id="file-name" style="margin-top: 15px; font-size: 16px;">Nincs kiválasztva</p>
-                <p style="font-size: 14px; color: #999;">Akár 5000+ fájl egyszerre!</p>
-            </div>
-            <input type="submit" class="submit-btn" value="📤 FELTÖLTÉS ÉS FELDOLGOZÁS">
-        </form>
+        <!-- OPTION 1: Folder Path -->
+        <div class="section">
+            <h3>📂 1. Mappa megadása (ajánlott)</h3>
+            <form method="post" action="/process-folder" onsubmit="showLoading()">
+                <input type="text" name="folder_path" placeholder="/path/to/pdfs mappa" value="{{ last_folder or '' }}">
+                <input type="submit" class="submit-btn folder" value="📂 MAPPA FELDOLGOZÁSA">
+            </form>
+            <p style="font-size: 12px; color: #999; margin-top: 10px;">Pl: /Users/visoro/PDFs vagy C:\\Documents\\PDFs</p>
+        </div>
         
-        <p class="stats">Feltöltött PDF-ek: <strong>{{ pdf_count }}</strong></p>
+        <div class="or-divider">— VAGY —</div>
+        
+        <!-- OPTION 2: Upload files -->
+        <div class="section">
+            <h3>📤 2. Fájlok feltöltése</h3>
+            <form method="post" enctype="multipart/form-data" onsubmit="showLoading()">
+                <div class="upload-area">
+                    <label for="file-input" class="file-label">📁 PDF fájlok kiválasztása</label>
+                    <input id="file-input" type="file" name="files" multiple accept=".pdf" onchange="updateFileName(this)">
+                    <p id="file-name" style="margin-top: 15px; font-size: 16px;">Nincs kiválasztva</p>
+                </div>
+                <input type="submit" class="submit-btn" value="📤 FELTÖLTÉS ÉS FELDOLGOZÁS">
+            </form>
+        </div>
 
         {% if message %}
         <div class="success-box">
             <h2>{{ message }}</h2>
             <a href="/progress" class="action-btn progress-btn">📊 Feldolgozás állapota</a>
+        </div>
+        {% endif %}
+
+        {% if error %}
+        <div class="error-box">
+            <h3>❌ {{ error }}</h3>
         </div>
         {% endif %}
 
@@ -194,13 +217,18 @@ HTML_PROGRESS = """
 # ROUTES
 # ============================================================================
 
+# Store last used folder path
+_last_folder = ""
+
 def count_pdfs():
     if not UPLOAD_DIR.exists(): return 0
     return len(list(UPLOAD_DIR.rglob("*.pdf")))
 
 @app.route("/", methods=["GET", "POST"])
 def index():
+    global _last_folder
     message = None
+    error = None
     
     if request.method == "POST":
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -227,10 +255,69 @@ def index():
     return render_template_string(
         HTML_INDEX, 
         pdf_count=count_pdfs(),
-        message=message, 
+        message=message,
+        error=error,
         is_processing=is_processing,
-        excel_exists=excel_exists
+        excel_exists=excel_exists,
+        last_folder=_last_folder
     )
+
+@app.route("/process-folder", methods=["POST"])
+def process_folder():
+    global _last_folder
+    
+    folder_path = request.form.get("folder_path", "").strip()
+    _last_folder = folder_path
+    
+    if not folder_path:
+        return render_template_string(
+            HTML_INDEX,
+            pdf_count=count_pdfs(),
+            error="Kérlek add meg a mappa útvonalát!",
+            is_processing=False,
+            excel_exists=(OUTPUT_DIR / "cadastral_data.xlsx").exists(),
+            last_folder=_last_folder
+        )
+    
+    folder = Path(folder_path)
+    
+    if not folder.exists():
+        return render_template_string(
+            HTML_INDEX,
+            pdf_count=count_pdfs(),
+            error=f"A mappa nem létezik: {folder_path}",
+            is_processing=False,
+            excel_exists=(OUTPUT_DIR / "cadastral_data.xlsx").exists(),
+            last_folder=_last_folder
+        )
+    
+    if not folder.is_dir():
+        return render_template_string(
+            HTML_INDEX,
+            pdf_count=count_pdfs(),
+            error=f"Ez nem egy mappa: {folder_path}",
+            is_processing=False,
+            excel_exists=(OUTPUT_DIR / "cadastral_data.xlsx").exists(),
+            last_folder=_last_folder
+        )
+    
+    # Count PDFs in folder
+    pdfs = list(folder.glob("*.pdf"))
+    if not pdfs:
+        return render_template_string(
+            HTML_INDEX,
+            pdf_count=count_pdfs(),
+            error=f"Nincs PDF fájl a mappában: {folder_path}",
+            is_processing=False,
+            excel_exists=(OUTPUT_DIR / "cadastral_data.xlsx").exists(),
+            last_folder=_last_folder
+        )
+    
+    # Start processing directly from the folder
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    success, msg = start_background_processing(folder, OUTPUT_DIR, resume=False)
+    
+    return redirect(url_for("progress"))
 
 @app.route("/progress")
 def progress():
