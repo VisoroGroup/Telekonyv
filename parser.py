@@ -44,6 +44,7 @@ def extract_cadastral_number(text: str) -> str:
 def extract_owner_details(text: str) -> Tuple[str, str, str, str]:
     """
     Extracts Owner Name, Quota, Mode of Acquisition, and Act.
+    Handles: person names, company names (S.A., S.R.L.), municipalities, etc.
     """
     part_ii_match = re.search(r"B\.\s*Partea\s+II.*?(?=C\.\s*Partea|Anexa|SARCINI)", text, re.IGNORECASE | re.DOTALL)
     if not part_ii_match:
@@ -54,25 +55,44 @@ def extract_owner_details(text: str) -> Tuple[str, str, str, str]:
     if "proprietar neidentificat" in part_ii.lower():
         return "Proprietar neidentificat", "1/1", "Lege", ""
 
-    # 1. Extract Owner Names
+    # 1. Extract Owner Names - NEW IMPROVED LOGIC
     owners = []
-    pattern = r"(?:^|\s|\n)(\d+)\)\s*([A-ZĂÂÎȘŢ\-\s]+?)(?=\,|\;|\s+soti|\s+bun|\s+cota|\s+incheierea|\s+Act|\s+Imobil|\s+Intabulare|\s+necasatorit|\s+casatorit|\s+vaduva|[\r\n]|$)"
-    matches = re.findall(pattern, part_ii)
     
-    if matches:
-        last_match = matches[-1]
-        last_index = int(last_match[0])
-        for match in reversed(matches):
-            i, name = match
-            current_idx = int(i)
-            if current_idx <= last_index and len(owners) < 2: 
-                clean_name = name.strip()
-                if len(clean_name) > 3 and "INTABULARE" not in clean_name:
-                    owners.append(clean_name)
-            else:
-                break
+    # Pattern 1: Match numbered owners like "1) OWNER NAME" - handles companies, municipalities, persons
+    # This pattern captures everything after "1)" until common delimiters
+    numbered_pattern = r'(\d+)\)\s*([A-ZĂÂÎȘȚŢŞa-zăâîșțţş\s\.\,\-]+?)(?=\nOBSERV|\n[A-Z]\d|\nB\d|\nRadiat|$)'
+    numbered_matches = re.findall(numbered_pattern, part_ii)
     
-    owner_str = " & ".join(reversed(owners)) if owners else "Nedetectat"
+    if numbered_matches:
+        for idx, name in numbered_matches:
+            clean_name = name.strip()
+            # Clean up trailing commas, "domeniu privat", etc.
+            clean_name = re.sub(r',\s*domeniu\s+privat\s*$', '', clean_name, flags=re.IGNORECASE)
+            clean_name = re.sub(r',\s*$', '', clean_name)
+            clean_name = clean_name.strip()
+            
+            if len(clean_name) > 2 and "INTABULARE" not in clean_name.upper():
+                owners.append(clean_name)
+    
+    # Pattern 2: Fallback - look for common entity patterns if no numbered matches
+    if not owners:
+        # Try to find company names
+        company_match = re.search(r'(?:S\.C\.\s*)?([A-ZĂÂÎȘȚa-zăâîșț\s\.\-]+(?:S\.A\.|S\.R\.L\.|SA|SRL))', part_ii)
+        if company_match:
+            owners.append(company_match.group(1).strip())
+        
+        # Try to find municipalities (handles both "MUNICIPIUL TULCEA" and "Municipiul Tulcea")
+        muni_match = re.search(r'((?:MUNICIPIUL|JUDEȚUL|COMUNA|ORAȘUL|Municipiul|Județul|Comuna|Orașul)\s+[A-ZĂÂÎȘȚa-zăâîșț]+)', part_ii)
+        if muni_match:
+            owners.append(muni_match.group(1).strip())
+    
+    # Pattern 3: If still no owners, search in full original text for MUNICIPIUL
+    if not owners:
+        muni_full = re.search(r'((?:MUNICIPIUL|JUDEȚUL|COMUNA|ORAȘUL)\s+[A-ZĂÂÎȘȚ]+)', text)
+        if muni_full:
+            owners.append(muni_full.group(1).strip())
+    
+    owner_str = " & ".join(owners[:2]) if owners else "Nedetectat"
 
     # 2. Extract Cota
     cota = ""
