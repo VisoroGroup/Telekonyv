@@ -91,20 +91,13 @@ def normalize_romanian_text(text: str) -> str:
     if not text:
         return ""
     
-    # Common OCR misreads
+    # Common OCR misreads - normalize cedilla forms to comma-below forms
     replacements = {
-        'ţ': 'ț',  # Normalize to correct Unicode
-        'ş': 'ș',
-        'Ţ': 'Ț',
-        'Ş': 'Ș',
-        'î': 'î',
-        'â': 'â',
-        'ă': 'ă',
-        'Î': 'Î',
-        'Â': 'Â',
-        'Ă': 'Ă',
-        '|': 'I',  # Common OCR mistake
-        '0': 'O',  # In names, 0 is often O
+        'ţ': 'ț',  # t-cedilla to t-comma-below
+        'ş': 'ș',  # s-cedilla to s-comma-below
+        'Ţ': 'Ț',  # T-cedilla to T-comma-below
+        'Ş': 'Ș',  # S-cedilla to S-comma-below
+        '|': 'I',  # Common OCR mistake: pipe to I
     }
     
     for old, new in replacements.items():

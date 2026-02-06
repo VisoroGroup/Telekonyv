@@ -62,7 +62,8 @@ def extract_owner_details(text: str) -> Tuple[str, str, str, str]:
     if matches:
         last_match = matches[-1]
         last_index = int(last_match[0])
-        for i, name in reversed(matches):
+        for match in reversed(matches):
+            i, name = match
             current_idx = int(i)
             if current_idx <= last_index and len(owners) < 2: 
                 clean_name = name.strip()
@@ -165,9 +166,9 @@ def extract_constructions(text: str, cad_base: str) -> List[Dict]:
     
     if len(parts) < 2: return []
 
-    for i in range(1, len(parts), 2):
+    for i in range(1, len(parts) - 1, 2):
         full_id = parts[i]
-        data_chunk = parts[i+1]
+        data_chunk = parts[i+1] if i+1 < len(parts) else ""
         
         cid = full_id.split('-')[1] # C1
         
