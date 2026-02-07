@@ -317,16 +317,63 @@ def extract_constructions(text: str, cad_base: str) -> List[Dict]:
                     # Round to integer
                     surface = str(int(round(float(surf_match.group(1)))))
                 
+                # Extract S. construita desfasurata
+                surf_desf = ""
+                desf_match = re.search(r'desfasurata:?\s*(\d+(?:\.\d+)?)\s*mp', block, re.IGNORECASE)
+                if desf_match:
+                    surf_desf = str(int(round(float(desf_match.group(1)))))
+                # Also check for "Sup.desfasurata=XXX mp" format
+                if not surf_desf:
+                    desf_match2 = re.search(r'Sup\.?\s*desfasurata\s*=\s*(\d+)', block, re.IGNORECASE)
+                    if desf_match2:
+                        surf_desf = desf_match2.group(1)
+                
                 # Extract nr niveluri
                 nr_niv = ""
                 niv_match = re.search(r'Nr\.\s*niveluri:\s*(\d+)', block, re.IGNORECASE)
                 if niv_match:
                     nr_niv = niv_match.group(1)
                 
-                # Destination - from the entire block (last line usually)
-                dest = "Cladire"
+                # Extract year - multiple patterns
+                year = ""
+                # Pattern 1: "an XXXX" at end (e.g., "P+1+M, an 2008")
+                year_match = re.search(r',?\s*an\s+(19\d{2}|20\d{2})', block, re.IGNORECASE)
+                if year_match:
+                    year = year_match.group(1)
+                # Pattern 2: "Anul construirii XXXX"
+                if not year:
+                    year_match2 = re.search(r'Anul\s+construirii\s+(19\d{2}|20\d{2})', block, re.IGNORECASE)
+                    if year_match2:
+                        year = year_match2.group(1)
+                # Pattern 3: Standalone year (less reliable, use as fallback)
+                if not year:
+                    year_match3 = re.search(r'\b(19[5-9]\d|20[0-2]\d)\b', block)
+                    if year_match3:
+                        year = year_match3.group(1)
+                
+                # Material extraction
+                material = ""
                 block_lower = block.lower()
-                if "locuinta" in block_lower or "locuințe" in block_lower: dest = "Locuinta"
+                if "beton" in block_lower: material = "Beton"
+                elif "caramida" in block_lower or "cărămidă" in block_lower: material = "Caramida"
+                elif "lemn" in block_lower: material = "Lemn"
+                elif "paianta" in block_lower or "paiantă" in block_lower: material = "Paianta"
+                elif "metal" in block_lower: material = "Metal"
+                
+                # Floor info (obs)
+                obs = ""
+                floor_match = re.search(r'\b((?:S\+)?P(?:\+\d+)?(?:\+M)?)\b', block, re.IGNORECASE)
+                if floor_match:
+                    obs = floor_match.group(1).upper()
+                
+                # Destination - from the entire block (more specific patterns first)
+                dest = "Cladire"
+                if "spatii comerciale" in block_lower or "spatiu comercial" in block_lower: dest = "Spatii Comerciale"
+                elif "pensiune" in block_lower: dest = "Pensiune"
+                elif "cheu" in block_lower or "bazin" in block_lower: dest = "Cheu"
+                elif "vestiar" in block_lower: dest = "Vestiar"
+                elif "sediu" in block_lower: dest = "Sediu"
+                elif "locuinta" in block_lower or "locuințe" in block_lower or "locuinte" in block_lower: dest = "Locuinta"
                 elif "anexa" in block_lower: dest = "Anexa"
                 elif "garaj" in block_lower: dest = "Garaj"
                 elif "magazie" in block_lower: dest = "Magazie"
@@ -339,15 +386,23 @@ def extract_constructions(text: str, cad_base: str) -> List[Dict]:
                 elif "atelier" in block_lower: dest = "Atelier"
                 elif "depozit" in block_lower: dest = "Depozit"
                 elif "hala" in block_lower: dest = "Hala"
+                elif "imprejmuire" in block_lower or "gard" in block_lower: dest = "Imprejmuire"
+                elif "sopron" in block_lower: dest = "Sopron"
+                elif "beci" in block_lower or "pivnita" in block_lower: dest = "Beci"
+                elif "wc" in block_lower or "toaleta" in block_lower: dest = "WC"
+                elif "terasa" in block_lower: dest = "Terasa"
+                elif "centrala" in block_lower: dest = "Centrala"
+                elif "statie" in block_lower: dest = "Statie"
+                elif "piscina" in block_lower: dest = "Piscina"
                 
                 buildings.append({
                     "nr": cid,
                     "destinatie": dest,
                     "surface": surface,
-                    "surface_desf": "",
-                    "year": "",
-                    "material": "",
-                    "obs": "",
+                    "surface_desf": surf_desf,
+                    "year": year,
+                    "material": material,
+                    "obs": obs,
                     "nr_niv": nr_niv
                 })
             
@@ -421,37 +476,78 @@ def extract_constructions(text: str, cad_base: str) -> List[Dict]:
                     surface = n
                     break
 
-        # Desfasurata surface
+        # Desfasurata surface - multiple patterns
         surf_desf = ""
-        desf_match = re.search(r"desfasurata:?\s*(\d+)", data_chunk, re.IGNORECASE)
+        desf_match = re.search(r"desfasurata:?\s*(\d+(?:\.\d+)?)\s*mp", data_chunk, re.IGNORECASE)
         if desf_match:
-            surf_desf = desf_match.group(1)
+            surf_desf = str(int(round(float(desf_match.group(1)))))
+        # Also check for "Sup.desfasurata=XXX mp" format
+        if not surf_desf:
+            desf_match2 = re.search(r"Sup\.?\s*desfasurata\s*=\s*(\d+)", data_chunk, re.IGNORECASE)
+            if desf_match2:
+                surf_desf = desf_match2.group(1)
 
-        # Destination
+        # Destination - more specific patterns first
         dest = "Cladire"
-        if "locuinta" in data_chunk.lower(): dest = "Locuinta"
-        elif "anexa" in data_chunk.lower(): dest = "Anexa"
-        elif "garaj" in data_chunk.lower(): dest = "Garaj"
-        elif "magazie" in data_chunk.lower(): dest = "Magazie"
-        elif "industrial" in data_chunk.lower(): dest = "Industrial"
-        elif "piata" in data_chunk.lower(): dest = "Piata"
+        chunk_lower = data_chunk.lower()
+        if "spatii comerciale" in chunk_lower or "spatiu comercial" in chunk_lower: dest = "Spatii Comerciale"
+        elif "pensiune" in chunk_lower: dest = "Pensiune"
+        elif "cheu" in chunk_lower or "bazin" in chunk_lower: dest = "Cheu"
+        elif "vestiar" in chunk_lower: dest = "Vestiar"
+        elif "sediu" in chunk_lower: dest = "Sediu"
+        elif "locuinta" in chunk_lower or "locuințe" in chunk_lower or "locuinte" in chunk_lower: dest = "Locuinta"
+        elif "anexa" in chunk_lower: dest = "Anexa"
+        elif "garaj" in chunk_lower: dest = "Garaj"
+        elif "magazie" in chunk_lower: dest = "Magazie"
+        elif "remiza" in chunk_lower: dest = "Remiza"
+        elif "post trafo" in chunk_lower: dest = "Post Trafo"
+        elif "birou" in chunk_lower: dest = "Birouri"
+        elif "cabina" in chunk_lower: dest = "Cabina"
+        elif "punct termic" in chunk_lower: dest = "Punct Termic"
+        elif "industrial" in chunk_lower: dest = "Industrial"
+        elif "atelier" in chunk_lower: dest = "Atelier"
+        elif "depozit" in chunk_lower: dest = "Depozit"
+        elif "hala" in chunk_lower: dest = "Hala"
+        elif "imprejmuire" in chunk_lower or "gard" in chunk_lower: dest = "Imprejmuire"
+        elif "sopron" in chunk_lower: dest = "Sopron"
+        elif "beci" in chunk_lower or "pivnita" in chunk_lower: dest = "Beci"
+        elif "wc" in chunk_lower or "toaleta" in chunk_lower: dest = "WC"
+        elif "terasa" in chunk_lower: dest = "Terasa"
+        elif "centrala" in chunk_lower: dest = "Centrala"
+        elif "statie" in chunk_lower: dest = "Statie"
+        elif "piscina" in chunk_lower: dest = "Piscina"
+        elif "piata" in chunk_lower: dest = "Piata"
 
-        # Year
-        year_match = re.search(r"\b(19\d{2}|20\d{2})\b", data_chunk)
-        year = year_match.group(1) if year_match else ""
+        # Year - multiple patterns
+        year = ""
+        # Pattern 1: "an XXXX" at end
+        year_match = re.search(r',?\s*an\s+(19\d{2}|20\d{2})', data_chunk, re.IGNORECASE)
+        if year_match:
+            year = year_match.group(1)
+        # Pattern 2: "Anul construirii XXXX"
+        if not year:
+            year_match2 = re.search(r'Anul\s+construirii\s+(19\d{2}|20\d{2})', data_chunk, re.IGNORECASE)
+            if year_match2:
+                year = year_match2.group(1)
+        # Pattern 3: Standalone year (less reliable)
+        if not year:
+            year_match3 = re.search(r'\b(19[5-9]\d|20[0-2]\d)\b', data_chunk)
+            if year_match3:
+                year = year_match3.group(1)
 
         # Material
         material = ""
-        if "beton" in data_chunk.lower(): material = "Beton"
-        elif "caramida" in data_chunk.lower(): material = "Caramida"
-        elif "lemn" in data_chunk.lower(): material = "Lemn"
-        elif "paianta" in data_chunk.lower(): material = "Paianta"
+        if "beton" in chunk_lower: material = "Beton"
+        elif "caramida" in chunk_lower or "cărămidă" in chunk_lower: material = "Caramida"
+        elif "lemn" in chunk_lower: material = "Lemn"
+        elif "paianta" in chunk_lower or "paiantă" in chunk_lower: material = "Paianta"
+        elif "metal" in chunk_lower: material = "Metal"
 
         # Floor info
         obs = ""
         floor_match = re.search(r"\b((?:S\+)?P(?:\+\d+)?(?:\+M)?)\b", data_chunk, re.IGNORECASE)
         if floor_match:
-            obs = floor_match.group(1)
+            obs = floor_match.group(1).upper()
         
         # Nr niveluri  
         nr_niv = ""
