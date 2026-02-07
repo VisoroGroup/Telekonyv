@@ -49,12 +49,12 @@ def extract_owner_details(text: str) -> Tuple[str, str, str, str]:
     # Fixed regex: read B section until C. Partea III (not stopping at "Anexa" in middle of text)
     part_ii_match = re.search(r"B\.\s*Partea\s+II.*?(?=C\.\s*Partea\s+III)", text, re.IGNORECASE | re.DOTALL)
     if not part_ii_match:
-        return "Fara proprietar identificat", "", "", ""
+        return "Fara proprietar identificat", "", "", "", ""
     
     part_ii = part_ii_match.group(0)
     
     if "proprietar neidentificat" in part_ii.lower():
-        return "Proprietar neidentificat", "1/1", "Lege", ""
+        return "Proprietar neidentificat", "1/1", "Lege", "", ""
 
     # 1. Extract Owner Names - COMPREHENSIVE LOGIC
     owners = []
