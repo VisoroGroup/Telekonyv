@@ -285,7 +285,75 @@ def extract_constructions(text: str, cad_base: str) -> List[Dict]:
     """Extract construction data from the document."""
     buildings = []
     
-    # Find the construction section
+    # FIRST: Check for A1.x format in "A. Partea I" section (embedded constructions)
+    # This format often has MORE buildings than "Date referitoare" section
+    # Format: A1.1 31573-C1 ... \n ... \n Nr. niveluri:1; S. construita la sol:20 mp; ... \n REMIZA P.S.I.
+    part_a = re.search(r'A\.\s*Partea\s+I.*?(?=B\.\s*Partea\s+II)', text, re.IGNORECASE | re.DOTALL)
+    if part_a:
+        part_a_text = part_a.group(0)
+        
+        # Find all A1.x blocks - each block spans multiple lines until the next A1.x
+        a1x_starts = list(re.finditer(r'A1\.(\d+)\s+(\d+-C\d+)', part_a_text))
+        
+        if a1x_starts:
+            for i, match in enumerate(a1x_starts):
+                a1_idx = match.group(1)
+                full_id = match.group(2)
+                cid = full_id.split('-')[1] if '-' in full_id else f"C{a1_idx}"
+                
+                # Get the block until the next A1.x or end of section
+                start_pos = match.start()
+                if i + 1 < len(a1x_starts):
+                    end_pos = a1x_starts[i + 1].start()
+                else:
+                    end_pos = len(part_a_text)
+                
+                block = part_a_text[start_pos:end_pos]
+                
+                # Extract surface from block - "S. construita la sol:XX mp" (may have decimals)
+                surface = ""
+                surf_match = re.search(r'S\.\s*construita\s+la\s+sol:\s*(\d+(?:\.\d+)?)\s*mp', block, re.IGNORECASE)
+                if surf_match:
+                    # Round to integer
+                    surface = str(int(round(float(surf_match.group(1)))))
+                
+                # Extract nr niveluri
+                nr_niv = ""
+                niv_match = re.search(r'Nr\.\s*niveluri:\s*(\d+)', block, re.IGNORECASE)
+                if niv_match:
+                    nr_niv = niv_match.group(1)
+                
+                # Destination - from the entire block (last line usually)
+                dest = "Cladire"
+                block_lower = block.lower()
+                if "locuinta" in block_lower or "locuințe" in block_lower: dest = "Locuinta"
+                elif "anexa" in block_lower: dest = "Anexa"
+                elif "garaj" in block_lower: dest = "Garaj"
+                elif "magazie" in block_lower: dest = "Magazie"
+                elif "remiza" in block_lower or "remiza p.s.i" in block_lower: dest = "Remiza"
+                elif "post trafo" in block_lower: dest = "Post Trafo"
+                elif "birou" in block_lower: dest = "Birouri"
+                elif "cabina" in block_lower: dest = "Cabina"
+                elif "punct termic" in block_lower: dest = "Punct Termic"
+                elif "industrial" in block_lower: dest = "Industrial"
+                elif "atelier" in block_lower: dest = "Atelier"
+                elif "depozit" in block_lower: dest = "Depozit"
+                elif "hala" in block_lower: dest = "Hala"
+                
+                buildings.append({
+                    "nr": cid,
+                    "destinatie": dest,
+                    "surface": surface,
+                    "surface_desf": "",
+                    "year": "",
+                    "material": "",
+                    "obs": "",
+                    "nr_niv": nr_niv
+                })
+            
+            return buildings
+    
+    # SECOND (fallback): Find the "Date referitoare la constructii" section
     section_match = re.search(
         r"Date\s+referitoare\s+la\s+construc[tț]ii(.*?)(?=Lungime\s+Segmente|Extrase\s+pentru|Document\s+care|\Z)", 
         text, 
