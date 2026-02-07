@@ -373,23 +373,25 @@ def upload_zip():
         zip_path = UPLOAD_DIR / "uploaded.zip"
         zipfile_upload.save(zip_path)
         
-        # Extract PDFs from ZIP
+        # Extract PDFs from ZIP - use streaming to avoid memory issues
         pdf_count = 0
         with zipfile.ZipFile(zip_path, 'r') as zf:
             for name in zf.namelist():
-                # Skip directories and non-PDF files
+                # Skip directories, non-PDF files, and macOS resource forks
                 if name.endswith('/') or not name.lower().endswith('.pdf'):
+                    continue
+                if name.startswith('__MACOSX') or name.startswith('._'):
                     continue
                 
                 # Extract PDF with flat structure (no subdirs)
                 basename = Path(name).name
-                if basename:
-                    # Read file from zip and write to upload dir
+                if basename and not basename.startswith('._'):
+                    # Use streaming copy to avoid memory issues
+                    dest_path = UPLOAD_DIR / basename
                     with zf.open(name) as src:
-                        dest_path = UPLOAD_DIR / basename
                         with open(dest_path, 'wb') as dest:
-                            dest.write(src.read())
-                        pdf_count += 1
+                            shutil.copyfileobj(src, dest)
+                    pdf_count += 1
         
         # Remove the ZIP file
         zip_path.unlink()

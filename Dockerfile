@@ -33,5 +33,5 @@ RUN mkdir -p input_pdfs output_excel temp_images
 # Expose port (Railway uses PORT env var)
 EXPOSE 5000
 
-# Run with Gunicorn - use PORT env var for Railway compatibility
-CMD gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 2 --timeout 300 app:app
+# Run with Gunicorn - use high timeout for large ZIP uploads
+CMD gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 2 --timeout 600 app:app
