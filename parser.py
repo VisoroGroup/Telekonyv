@@ -197,10 +197,12 @@ def extract_parcel_data(text: str) -> Tuple[str, str, str]:
     return measured, doc_surf, obs
 
 def extract_constructions(text: str, cad_base: str) -> List[Dict]:
+    """Extract construction data from the document."""
     buildings = []
     
+    # Find the construction section
     section_match = re.search(
-        r"(?:Date\s+referitoare\s+la\s+construc[tț]ii|Construc[tț]ii)(.*?)(?=Lungime\s+Segmente|B\.\s*Partea|Date\s+referitoare\s+la\s+teren|\Z)", 
+        r"Date\s+referitoare\s+la\s+construc[tț]ii(.*?)(?=Lungime\s+Segmente|Extrase\s+pentru|Document\s+care|\Z)", 
         text, 
         re.DOTALL | re.IGNORECASE
     )
@@ -209,52 +211,100 @@ def extract_constructions(text: str, cad_base: str) -> List[Dict]:
         return []
 
     block = section_match.group(1)
-    parts = re.split(r"(\d+-C\d+)", block)
     
-    if len(parts) < 2: return []
-
-    for i in range(1, len(parts) - 1, 2):
-        full_id = parts[i]
-        data_chunk = parts[i+1] if i+1 < len(parts) else ""
+    # Find all construction IDs in the block
+    construction_pattern = r'(\d+-C\d+)'
+    matches = list(re.finditer(construction_pattern, block))
+    
+    if not matches:
+        return []
+    
+    for idx, match in enumerate(matches):
+        full_id = match.group(1)  # e.g., "30705-C1"
+        start_pos = match.end()
         
-        cid = full_id.split('-')[1] # C1
-        
-        surface = ""
-        explicit_surf = re.search(r"S\.\s*construita[^:]*:?\s*(\d+)", data_chunk, re.IGNORECASE)
-        if explicit_surf:
-            surface = explicit_surf.group(1)
+        # Get the chunk until the next construction or end
+        if idx + 1 < len(matches):
+            end_pos = matches[idx + 1].start()
         else:
-            nums = re.findall(r"\b(\d{2,5})\b", data_chunk)
+            end_pos = len(block)
+        
+        data_chunk = block[start_pos:end_pos]
+        
+        # Also include text BEFORE the ID (same line) for surface
+        line_start = block.rfind('\n', 0, match.start())
+        pre_text = block[line_start:match.start()] if line_start != -1 else ""
+        
+        cid = full_id.split('-')[1]  # C1
+        
+        # Surface extraction - try multiple patterns
+        surface = ""
+        
+        # Pattern 1: "S. construita la sol:XXX mp" or "S. construita:XXX"
+        surf_match = re.search(r"S\.\s*construita[^:]*:?\s*(\d+)", data_chunk, re.IGNORECASE)
+        if surf_match:
+            surface = surf_match.group(1)
+        
+        # Pattern 2: "Supraf. (mp)" column - number on its own line after destination
+        if not surface:
+            # Look for standalone number (surface) after construction type
+            nums = re.findall(r'\n(\d{2,5})\n', data_chunk)
             for n in nums:
-                if not (1900 < int(n) < 2030): surface = n; break
+                if 10 <= int(n) <= 50000 and not (1900 < int(n) < 2030):
+                    surface = n
+                    break
+        
+        # Pattern 3: Number right after text like "constructii industriale"
+        if not surface:
+            surf_inline = re.search(r'(?:constructii|anexa|locuinta|garaj)\s*\n?\s*(\d{2,5})', data_chunk, re.IGNORECASE)
+            if surf_inline and not (1900 < int(surf_inline.group(1)) < 2030):
+                surface = surf_inline.group(1)
+        
+        # Pattern 4: Check the line before the ID
+        if not surface and pre_text:
+            nums = re.findall(r'(\d{2,5})', pre_text)
+            for n in nums:
+                if 10 <= int(n) <= 50000 and not (1900 < int(n) < 2030):
+                    surface = n
+                    break
 
+        # Desfasurata surface
         surf_desf = ""
         desf_match = re.search(r"desfasurata:?\s*(\d+)", data_chunk, re.IGNORECASE)
-        if desf_match: surf_desf = desf_match.group(1)
+        if desf_match:
+            surf_desf = desf_match.group(1)
 
+        # Destination
         dest = "Cladire"
         if "locuinta" in data_chunk.lower(): dest = "Locuinta"
         elif "anexa" in data_chunk.lower(): dest = "Anexa"
         elif "garaj" in data_chunk.lower(): dest = "Garaj"
         elif "magazie" in data_chunk.lower(): dest = "Magazie"
+        elif "industrial" in data_chunk.lower(): dest = "Industrial"
+        elif "piata" in data_chunk.lower(): dest = "Piata"
 
+        # Year
         year_match = re.search(r"\b(19\d{2}|20\d{2})\b", data_chunk)
         year = year_match.group(1) if year_match else ""
 
+        # Material
         material = ""
         if "beton" in data_chunk.lower(): material = "Beton"
         elif "caramida" in data_chunk.lower(): material = "Caramida"
         elif "lemn" in data_chunk.lower(): material = "Lemn"
         elif "paianta" in data_chunk.lower(): material = "Paianta"
 
+        # Floor info
         obs = ""
         floor_match = re.search(r"\b((?:S\+)?P(?:\+\d+)?(?:\+M)?)\b", data_chunk, re.IGNORECASE)
         if floor_match:
             obs = floor_match.group(1)
         
+        # Nr niveluri  
         nr_niv = ""
         niv_match = re.search(r"Nr\.\s*niveluri:?\s*(\d+)", data_chunk, re.IGNORECASE)
-        if niv_match: nr_niv = niv_match.group(1)
+        if niv_match:
+            nr_niv = niv_match.group(1)
 
         buildings.append({
             "nr": cid,
