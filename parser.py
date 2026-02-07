@@ -142,7 +142,73 @@ def extract_owner_details(text: str) -> Tuple[str, str, str, str]:
     if act_match:
         act = act_match.group(1).strip()[:50] 
 
-    return owner_str, cota, mod, act
+    # 5. Extract FULL owner history with dates
+    owner_history = extract_owner_history(part_ii)
+
+    return owner_str, cota, mod, act, owner_history
+
+
+def extract_owner_history(part_ii: str) -> str:
+    """
+    Extract all owners with their registration dates in chronological order.
+    Returns a string like: "2009-04-15: BUHAI ANATOLI, BUHAI MARUSEA | 2012-12-18: MOCANU VALENTIN"
+    """
+    history_entries = []
+    
+    # Find all B blocks with dates: "12345 / DD/MM/YYYY" followed by owner info
+    # Pattern: number / date + block until next number/date or end
+    blocks = re.split(r'(\d{4,6}\s*/\s*\d{2}/\d{2}/\d{4})', part_ii)
+    
+    for i in range(1, len(blocks), 2):
+        if i+1 >= len(blocks):
+            continue
+            
+        date_str = blocks[i]  # e.g., "11944 / 15/04/2009"
+        block_content = blocks[i+1]
+        
+        # Extract date
+        date_match = re.search(r'(\d{2})/(\d{2})/(\d{4})', date_str)
+        if not date_match:
+            continue
+        day, month, year = date_match.groups()
+        formatted_date = f"{year}-{month}-{day}"
+        
+        # Only include blocks with Intabulare (actual ownership registration)
+        if 'intabulare' not in block_content.lower():
+            continue
+        
+        # Extract owners from this block
+        block_owners = []
+        
+        # Find numbered owners: 1), 2), 3), etc.
+        owner_matches = re.findall(
+            r'(\d+)\)\s*([A-ZĂÂÎȘȚŢŞa-zăâîșțţş][A-ZĂÂÎȘȚŢŞa-zăâîșțţş\s\.\,\-\"\'\(\)]+?)(?=\n(?:\d+\)|Act|OBSERV|B\d|A\d|Document|se\s+noteaza)|$)',
+            block_content
+        )
+        
+        for num, owner_name in owner_matches:
+            clean_name = owner_name.strip()
+            # Clean up trailing commas and common words
+            clean_name = re.sub(r',\s*domeniu\s+privat.*$', '', clean_name, flags=re.IGNORECASE)
+            clean_name = re.sub(r',\s*in\s+indiviziune.*$', '', clean_name, flags=re.IGNORECASE)
+            clean_name = re.sub(r',\s*casatorit.*$', '', clean_name, flags=re.IGNORECASE)
+            clean_name = re.sub(r',\s*$', '', clean_name).strip()
+            
+            if clean_name and len(clean_name) > 2 and "INTABULARE" not in clean_name.upper():
+                if clean_name not in block_owners:
+                    block_owners.append(clean_name)
+        
+        if block_owners:
+            owners_str = ", ".join(block_owners[:5])  # Max 5 owners per entry
+            history_entries.append(f"{formatted_date}: {owners_str}")
+    
+    # Return chronologically sorted (oldest first)
+    if history_entries:
+        # Sort by date
+        history_entries.sort(key=lambda x: x[:10])
+        return " | ".join(history_entries)
+    
+    return ""
 
 def extract_sarcini(text: str) -> str:
     """Extracts Encumbrances (Part III)."""
@@ -190,9 +256,28 @@ def extract_parcel_data(text: str) -> Tuple[str, str, str]:
     din_acte = re.search(r"Din\s+acte:?\s*(\d+[\.\s]?\d*)", text, re.IGNORECASE)
     if din_acte: doc_surf = din_acte.group(1).replace('.', '').replace(' ', '')
 
+    # If no measured surface found, try table format
     if not measured:
+        # Pattern 1: A1 with number on same line
         table_match = re.search(r"A1[^\d\n]+[0-9\-/]+[^\d\n]+(\d{1,3}(?:\.\d{3})*)", text)
         if table_match: measured = table_match.group(1).replace('.', '')
+    
+    # Pattern 2: Multi-line format where surface is on next line after cadastral number
+    # Example: "A1 CAD: 6886-\n5094/1 965\n" -> surface is 965
+    if not measured:
+        multi_line = re.search(r"A1\s+(?:CAD:?\s*)?[\d\-/]+[\s\-]*\n[\d/]+\s+(\d{2,6})\s*\n", text)
+        if multi_line:
+            measured = multi_line.group(1)
+    
+    # Pattern 3: Just look for standalone number after A1 line
+    if not measured:
+        a1_section = re.search(r"A1\s.*?(?=B\.\s*Partea)", text, re.DOTALL)
+        if a1_section:
+            nums = re.findall(r'\s(\d{2,6})\s', a1_section.group(0))
+            for n in nums:
+                if 10 <= int(n) <= 500000:  # Reasonable surface range
+                    measured = n
+                    break
 
     return measured, doc_surf, obs
 
@@ -326,7 +411,7 @@ def parse_record(filename: str, text: str) -> List[Dict]:
     cf_num = extract_cf_number(clean_txt)
     cad_num = extract_cadastral_number(clean_txt)
     uat, loc = extract_uat_locality(clean_txt)
-    owner, cota, mod, act = extract_owner_details(clean_txt)
+    owner, cota, mod, act, owner_history = extract_owner_details(clean_txt)
     surf_meas, surf_doc, terrain_obs = extract_parcel_data(clean_txt)
     sarcini = extract_sarcini(clean_txt)
     buildings = extract_constructions(clean_txt, cad_num)
@@ -365,6 +450,7 @@ def parse_record(filename: str, text: str) -> List[Dict]:
                 "Cota_Proprietate": cota,
                 "Mod_Dobandire": mod,
                 "Act_Proprietate": act,
+                "Tulajdonos_Tortenelem": owner_history,
                 "Sarcini": sarcini,
                 "Data_Emitere_Extras": data_em,
                 "Numar_Cerere": cerere
@@ -392,6 +478,7 @@ def parse_record(filename: str, text: str) -> List[Dict]:
             "Cota_Proprietate": cota,
             "Mod_Dobandire": mod,
             "Act_Proprietate": act,
+            "Tulajdonos_Tortenelem": owner_history,
             "Sarcini": sarcini,
             "Data_Emitere_Extras": data_em,
             "Numar_Cerere": cerere
