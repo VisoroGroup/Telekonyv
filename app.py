@@ -5,6 +5,7 @@ Supports large batches (5000+ files) with background processing and progress tra
 from flask import Flask, render_template_string, request, send_file, redirect, url_for, jsonify, Response
 from pathlib import Path
 import shutil
+import zipfile
 
 from batch_processor import get_processor, start_background_processing, stop_background_processing
 
@@ -90,9 +91,25 @@ HTML_INDEX = """
         
         <div class="or-divider">— VAGY —</div>
         
-        <!-- OPTION 2: Upload files -->
+        <!-- OPTION 2: ZIP Upload (recommended for Railway) -->
+        <div class="section" style="border-color: #27ae60;">
+            <h3>📦 2. ZIP fájl feltöltése (ajánlott Railway-hez)</h3>
+            <form method="post" action="/upload-zip" enctype="multipart/form-data" onsubmit="showLoading()">
+                <div class="upload-area" style="border-color: #27ae60;">
+                    <label for="zip-input" class="file-label" style="background: #27ae60;">📦 ZIP fájl kiválasztása</label>
+                    <input id="zip-input" type="file" name="zipfile" accept=".zip">
+                    <p id="zip-name" style="margin-top: 15px; font-size: 16px;">Max 1000+ PDF egyszerre!</p>
+                </div>
+                <input type="submit" class="submit-btn" value="📦 ZIP FELTÖLTÉS ÉS FELDOLGOZÁS">
+            </form>
+            <p style="font-size: 12px; color: #27ae60; margin-top: 10px;">💡 Tipp: Csomagold a PDF-eket ZIP-be és töltsd fel egyszerre!</p>
+        </div>
+
+        <div class="or-divider">— VAGY —</div>
+
+        <!-- OPTION 3: Upload individual files -->
         <div class="section">
-            <h3>📤 2. Fájlok feltöltése</h3>
+            <h3>📤 3. Egyedi fájlok feltöltése</h3>
             <form method="post" enctype="multipart/form-data" onsubmit="showLoading()">
                 <div class="upload-area">
                     <label for="file-input" class="file-label">📁 PDF fájlok kiválasztása</label>
@@ -318,6 +335,99 @@ def process_folder():
     success, msg = start_background_processing(folder, OUTPUT_DIR, resume=False)
     
     return redirect(url_for("progress"))
+
+@app.route("/upload-zip", methods=["POST"])
+def upload_zip():
+    """Handle ZIP file upload - extract PDFs and process."""
+    global _last_folder
+    
+    zipfile_upload = request.files.get("zipfile")
+    
+    if not zipfile_upload or not zipfile_upload.filename:
+        return render_template_string(
+            HTML_INDEX,
+            pdf_count=count_pdfs(),
+            error="Kérlek válassz ki egy ZIP fájlt!",
+            is_processing=False,
+            excel_exists=(OUTPUT_DIR / "cadastral_data.xlsx").exists(),
+            last_folder=_last_folder
+        )
+    
+    if not zipfile_upload.filename.lower().endswith('.zip'):
+        return render_template_string(
+            HTML_INDEX,
+            pdf_count=count_pdfs(),
+            error="Csak ZIP fájl tölthető fel!",
+            is_processing=False,
+            excel_exists=(OUTPUT_DIR / "cadastral_data.xlsx").exists(),
+            last_folder=_last_folder
+        )
+    
+    try:
+        # Clear previous uploads
+        if UPLOAD_DIR.exists():
+            shutil.rmtree(UPLOAD_DIR)
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # Save ZIP temporarily
+        zip_path = UPLOAD_DIR / "uploaded.zip"
+        zipfile_upload.save(zip_path)
+        
+        # Extract PDFs from ZIP
+        pdf_count = 0
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            for name in zf.namelist():
+                # Skip directories and non-PDF files
+                if name.endswith('/') or not name.lower().endswith('.pdf'):
+                    continue
+                
+                # Extract PDF with flat structure (no subdirs)
+                basename = Path(name).name
+                if basename:
+                    # Read file from zip and write to upload dir
+                    with zf.open(name) as src:
+                        dest_path = UPLOAD_DIR / basename
+                        with open(dest_path, 'wb') as dest:
+                            dest.write(src.read())
+                        pdf_count += 1
+        
+        # Remove the ZIP file
+        zip_path.unlink()
+        
+        if pdf_count == 0:
+            return render_template_string(
+                HTML_INDEX,
+                pdf_count=count_pdfs(),
+                error="A ZIP fájl nem tartalmaz PDF fájlokat!",
+                is_processing=False,
+                excel_exists=(OUTPUT_DIR / "cadastral_data.xlsx").exists(),
+                last_folder=_last_folder
+            )
+        
+        # Start processing
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        success, msg = start_background_processing(UPLOAD_DIR, OUTPUT_DIR, resume=False)
+        
+        return redirect(url_for("progress"))
+        
+    except zipfile.BadZipFile:
+        return render_template_string(
+            HTML_INDEX,
+            pdf_count=count_pdfs(),
+            error="Hibás ZIP fájl! Kérlek próbáld újra.",
+            is_processing=False,
+            excel_exists=(OUTPUT_DIR / "cadastral_data.xlsx").exists(),
+            last_folder=_last_folder
+        )
+    except Exception as e:
+        return render_template_string(
+            HTML_INDEX,
+            pdf_count=count_pdfs(),
+            error=f"Hiba történt: {str(e)[:100]}",
+            is_processing=False,
+            excel_exists=(OUTPUT_DIR / "cadastral_data.xlsx").exists(),
+            last_folder=_last_folder
+        )
 
 @app.route("/progress")
 def progress():
