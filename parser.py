@@ -44,9 +44,10 @@ def extract_cadastral_number(text: str) -> str:
 def extract_owner_details(text: str) -> Tuple[str, str, str, str]:
     """
     Extracts Owner Name, Quota, Mode of Acquisition, and Act.
-    Handles: person names, company names (S.A., S.R.L.), municipalities, etc.
+    Handles: person names, company names (S.A., S.R.L.), municipalities, state entities, etc.
     """
-    part_ii_match = re.search(r"B\.\s*Partea\s+II.*?(?=C\.\s*Partea|Anexa|SARCINI)", text, re.IGNORECASE | re.DOTALL)
+    # Fixed regex: read B section until C. Partea III (not stopping at "Anexa" in middle of text)
+    part_ii_match = re.search(r"B\.\s*Partea\s+II.*?(?=C\.\s*Partea\s+III)", text, re.IGNORECASE | re.DOTALL)
     if not part_ii_match:
         return "Fara proprietar identificat", "", "", ""
     
@@ -55,42 +56,68 @@ def extract_owner_details(text: str) -> Tuple[str, str, str, str]:
     if "proprietar neidentificat" in part_ii.lower():
         return "Proprietar neidentificat", "1/1", "Lege", ""
 
-    # 1. Extract Owner Names - NEW IMPROVED LOGIC
+    # 1. Extract Owner Names - COMPREHENSIVE LOGIC
     owners = []
     
-    # Pattern 1: Match numbered owners like "1) OWNER NAME" - handles companies, municipalities, persons
-    # This pattern captures everything after "1)" until common delimiters
-    numbered_pattern = r'(\d+)\)\s*([A-ZĂÂÎȘȚŢŞa-zăâîșțţş\s\.\,\-]+?)(?=\nOBSERV|\n[A-Z]\d|\nB\d|\nRadiat|$)'
+    # Pattern 1: Match numbered owners "1) OWNER NAME" anywhere in B section
+    # Include quotes for church names like PAROHIA "SFANTUL..."
+    numbered_pattern = r'1\)\s*([A-ZĂÂÎȘȚŢŞa-zăâîșțţş][A-ZĂÂÎȘȚŢŞa-zăâîșțţş\s\.\,\-\"\'\(\)]+?)(?=\n(?:Act|OBSERV|B\d|A\d|Radiat|Document)|$)'
     numbered_matches = re.findall(numbered_pattern, part_ii)
     
-    if numbered_matches:
-        for idx, name in numbered_matches:
-            clean_name = name.strip()
-            # Clean up trailing commas, "domeniu privat", etc.
-            clean_name = re.sub(r',\s*domeniu\s+privat\s*$', '', clean_name, flags=re.IGNORECASE)
-            clean_name = re.sub(r',\s*$', '', clean_name)
-            clean_name = clean_name.strip()
-            
-            if len(clean_name) > 2 and "INTABULARE" not in clean_name.upper():
+    for match in numbered_matches:
+        clean_name = match.strip()
+        # Clean up trailing commas, "domeniu privat", etc.
+        clean_name = re.sub(r',\s*domeniu\s+privat\s*$', '', clean_name, flags=re.IGNORECASE)
+        clean_name = re.sub(r',\s*$', '', clean_name)
+        clean_name = clean_name.strip()
+        
+        # Skip if it's just reference text
+        if len(clean_name) > 2 and "INTABULARE" not in clean_name.upper() and "DREPT DE" not in clean_name.upper():
+            if clean_name not in owners:
                 owners.append(clean_name)
     
-    # Pattern 2: Fallback - look for common entity patterns if no numbered matches
+    # Pattern 2: Special entities - STATE, AGENCIES, etc.
     if not owners:
-        # Try to find company names
+        state_patterns = [
+            r'(STATUL\s+ROMAN)',
+            r'(AGENTIA\s+DOMENIILOR\s+STATULUI)',
+            r'(ADMINISTRATIA\s+NATIONALA[^,\n]*)',
+            r'(REGIA\s+NATIONALA[^,\n]*)',
+            r'(SOCIETATEA\s+NATIONALA[^,\n]*)',
+            r'(CONSILIUL\s+LOCAL[^,\n]*)',
+            r'(PRIMARIA[^,\n]*)',
+        ]
+        for pattern in state_patterns:
+            match = re.search(pattern, part_ii, re.IGNORECASE)
+            if match:
+                owners.append(match.group(1).strip())
+                break
+    
+    # Pattern 3: Companies (S.A., S.R.L.)
+    if not owners:
         company_match = re.search(r'(?:S\.C\.\s*)?([A-ZĂÂÎȘȚa-zăâîșț\s\.\-]+(?:S\.A\.|S\.R\.L\.|SA|SRL))', part_ii)
         if company_match:
             owners.append(company_match.group(1).strip())
-        
-        # Try to find municipalities (handles both "MUNICIPIUL TULCEA" and "Municipiul Tulcea")
+    
+    # Pattern 4: Municipalities
+    if not owners:
         muni_match = re.search(r'((?:MUNICIPIUL|JUDEȚUL|COMUNA|ORAȘUL|Municipiul|Județul|Comuna|Orașul)\s+[A-ZĂÂÎȘȚa-zăâîșț]+)', part_ii)
         if muni_match:
             owners.append(muni_match.group(1).strip())
     
-    # Pattern 3: If still no owners, search in full original text for MUNICIPIUL
+    # Pattern 5: Search in full text for MUNICIPIUL with uppercase city name
     if not owners:
         muni_full = re.search(r'((?:MUNICIPIUL|JUDEȚUL|COMUNA|ORAȘUL)\s+[A-ZĂÂÎȘȚ]+)', text)
         if muni_full:
             owners.append(muni_full.group(1).strip())
+    
+    # Pattern 6: Person names - UPPERCASE format "LASTNAME FIRSTNAME"
+    if not owners:
+        # Look for typical Romanian person names after 1)
+        person_pattern = r'1\)\s*([A-ZĂÂÎȘȚ][A-ZĂÂÎȘȚ\-]+\s+[A-ZĂÂÎȘȚ][A-ZĂÂÎȘȚa-zăâîșț\-]+)'
+        person_match = re.search(person_pattern, part_ii)
+        if person_match:
+            owners.append(person_match.group(1).strip())
     
     owner_str = " & ".join(owners[:2]) if owners else "Nedetectat"
 
