@@ -293,7 +293,8 @@ def extract_constructions(text: str, cad_base: str) -> List[Dict]:
         part_a_text = part_a.group(0)
         
         # Find all A1.x blocks - each block spans multiple lines until the next A1.x
-        a1x_starts = list(re.finditer(r'A1\.(\d+)\s+(\d+-C\d+)', part_a_text))
+        # Handle variants: A1.1 XXX-C1, *A1.1 CAD: XXX-C1, A1.1 CAD: XXX-C1
+        a1x_starts = list(re.finditer(r'\*?A1\.(\d+)\s+(?:CAD:\s*)?(\d+-C\d+)', part_a_text))
         
         if a1x_starts:
             for i, match in enumerate(a1x_starts):
@@ -312,10 +313,22 @@ def extract_constructions(text: str, cad_base: str) -> List[Dict]:
                 
                 # Extract surface from block - "S. construita la sol:XX mp" (may have decimals)
                 surface = ""
-                surf_match = re.search(r'S\.\s*construita\s+la\s+sol:\s*(\d+(?:\.\d+)?)\s*mp', block, re.IGNORECASE)
+                surf_match = re.search(r'S\.\s*construita\s+la\s+sol:\s*(\d+(?:[.,]\d+)?)\s*mp', block, re.IGNORECASE)
                 if surf_match:
                     # Round to integer
-                    surface = str(int(round(float(surf_match.group(1)))))
+                    surface = str(int(round(float(surf_match.group(1).replace(',', '.')))))
+                
+                # Pattern 2: "suprafata construita de XXX mp" or "in suprafata de XXX mp"
+                if not surface:
+                    inline_match = re.search(r'(?:suprafata|suprafață)\s+(?:construita\s+)?de\s+(\d+(?:[.,]\d+)?)\s*m\.?p', block, re.IGNORECASE)
+                    if inline_match:
+                        surface = str(int(round(float(inline_match.group(1).replace(',', '.')))))
+                
+                # Pattern 3: "s.c. de XXX m.p."
+                if not surface:
+                    sc_match = re.search(r's\.c\.?\s+de\s+(\d+(?:[.,]\d+)?)\s*m\.?p', block, re.IGNORECASE)
+                    if sc_match:
+                        surface = str(int(round(float(sc_match.group(1).replace(',', '.')))))
                 
                 # Extract S. construita desfasurata
                 surf_desf = ""
@@ -373,16 +386,21 @@ def extract_constructions(text: str, cad_base: str) -> List[Dict]:
                 elif "cheu" in block_lower or "bazin" in block_lower: dest = "Cheu"
                 elif "vestiar" in block_lower: dest = "Vestiar"
                 elif "sediu" in block_lower: dest = "Sediu"
+                elif "casa de locuit" in block_lower or "casa" in block_lower: dest = "Locuinta"
                 elif "locuinta" in block_lower or "locuințe" in block_lower or "locuinte" in block_lower: dest = "Locuinta"
-                elif "anexa" in block_lower: dest = "Anexa"
+                elif "constructii de locuinte" in block_lower: dest = "Locuinta"
+                elif "constructii anexa" in block_lower: dest = "Anexa"
+                elif "anexa" in block_lower or "anexe" in block_lower: dest = "Anexa"
                 elif "garaj" in block_lower: dest = "Garaj"
+                elif "grajd" in block_lower: dest = "Grajd"
                 elif "magazie" in block_lower: dest = "Magazie"
                 elif "remiza" in block_lower or "remiza p.s.i" in block_lower: dest = "Remiza"
                 elif "post trafo" in block_lower: dest = "Post Trafo"
-                elif "birou" in block_lower: dest = "Birouri"
+                elif "birou" in block_lower or "birouri" in block_lower: dest = "Birouri"
                 elif "cabina" in block_lower: dest = "Cabina"
                 elif "punct termic" in block_lower: dest = "Punct Termic"
-                elif "industrial" in block_lower: dest = "Industrial"
+                elif "constructii industriale" in block_lower or "industrial" in block_lower: dest = "Industrial"
+                elif "laborator" in block_lower or "cofetarie" in block_lower: dest = "Industrial"
                 elif "atelier" in block_lower: dest = "Atelier"
                 elif "depozit" in block_lower: dest = "Depozit"
                 elif "hala" in block_lower: dest = "Hala"
@@ -405,6 +423,23 @@ def extract_constructions(text: str, cad_base: str) -> List[Dict]:
                     "obs": obs,
                     "nr_niv": nr_niv
                 })
+            
+            # Try to fill missing surfaces from B. Partea II notes
+            # Pattern: "constructia C1 in suprafata construita de 15 m.p."
+            # or "constructia C2 in s.c. de 15 m.p."
+            part_b = re.search(r'B\.\s*Partea\s+II.*?(?=C\.\s*Partea\s+III)', text, re.DOTALL | re.IGNORECASE)
+            if part_b:
+                b_text = part_b.group(0)
+                for b in buildings:
+                    if not b['surface']:
+                        cid_num = b['nr'].replace('C', '')
+                        # Pattern: "constructia C1 in suprafata construita de XX m.p."
+                        bp_match = re.search(
+                            rf'constructi[ai]\s+C{cid_num}\s+(?:in\s+)?(?:suprafata\s+(?:construita\s+)?de|s\.c\.?\s+de)\s+(\d+(?:[.,]\d+)?)\s*m\.?p',
+                            b_text, re.IGNORECASE
+                        )
+                        if bp_match:
+                            b['surface'] = str(int(round(float(bp_match.group(1).replace(',', '.')))))
             
             return buildings
     
