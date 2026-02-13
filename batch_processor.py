@@ -44,8 +44,11 @@ class BatchProcessor:
         self.should_stop = False
         
     def get_all_pdfs(self) -> List[Path]:
-        """Get all PDF files from input directory."""
-        return sorted(list(self.input_dir.glob("*.pdf")))
+        """Get all PDF files from input directory (skip macOS resource forks)."""
+        return sorted([
+            p for p in self.input_dir.glob("*.pdf")
+            if not p.name.startswith('._')
+        ])
     
     def load_checkpoint(self) -> Dict:
         """Load checkpoint from file."""
@@ -113,6 +116,10 @@ class BatchProcessor:
         error_info = None
         
         try:
+            # Skip macOS resource fork files
+            if pdf_path.name.startswith('._'):
+                return [], None  # Silently skip, don't count as error
+            
             # Check file size
             if pdf_path.stat().st_size == 0:
                 return [], {"file": pdf_path.name, "type": "EMPTY_PDF", "details": "0 byte fájl"}

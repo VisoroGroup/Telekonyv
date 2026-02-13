@@ -5,8 +5,9 @@ def clean_text(text: str) -> str:
     """Standardize text for easier regex matching."""
     if not text: return ""
     text = text.replace('\r', '')
-    text = text.replace('ţ', 't').replace('ş', 's').replace('ă', 'a').replace('î', 'i').replace('â', 'a')
-    text = text.replace('Ţ', 'T').replace('Ş', 'S').replace('Ă', 'A').replace('Î', 'I').replace('Â', 'A')
+    # Replace ALL Romanian diacritic variants (both cedilla AND comma-below forms)
+    text = text.replace('ţ', 't').replace('ș', 's').replace('ş', 's').replace('ă', 'a').replace('î', 'i').replace('â', 'a').replace('ț', 't')
+    text = text.replace('Ţ', 'T').replace('Ș', 'S').replace('Ş', 'S').replace('Ă', 'A').replace('Î', 'I').replace('Â', 'A').replace('Ț', 'T')
     text = re.sub(r'[ \t]+', ' ', text)
     return text
 
@@ -45,6 +46,7 @@ def extract_owner_details(text: str) -> Tuple[str, str, str, str]:
     """
     Extracts Owner Name, Quota, Mode of Acquisition, and Act.
     Handles: person names, company names (S.A., S.R.L.), municipalities, state entities, etc.
+    Strategy: Find the LAST valid Intabulare block (cota != 0/1) and extract owners from there.
     """
     # Fixed regex: read B section until C. Partea III (not stopping at "Anexa" in middle of text)
     part_ii_match = re.search(r"B\.\s*Partea\s+II.*?(?=C\.\s*Partea\s+III)", text, re.IGNORECASE | re.DOTALL)
@@ -56,27 +58,101 @@ def extract_owner_details(text: str) -> Tuple[str, str, str, str]:
     if "proprietar neidentificat" in part_ii.lower():
         return "Proprietar neidentificat", "1/1", "Lege", "", ""
 
-    # 1. Extract Owner Names - COMPREHENSIVE LOGIC
+    # === STRATEGY: Find last valid Intabulare block with owners ===
+    # Split Part II into B-blocks (B1, B2, B3, ...) and find those with Intabulare + numbered owners
+    # The LAST one with cota_actuala != 0/1 (or missing Radiat) is the current owner
+    
     owners = []
+    best_owners = []
+    best_cota = ""
     
-    # Pattern 1: Match numbered owners "1) OWNER NAME" anywhere in B section
-    # Include quotes for church names like PAROHIA "SFANTUL..."
-    numbered_pattern = r'1\)\s*([A-ZĂÂÎȘȚŢŞa-zăâîșțţş][A-ZĂÂÎȘȚŢŞa-zăâîșțţş\s\.\,\-\"\'\(\)]+?)(?=\n(?:Act|OBSERV|B\d|A\d|Radiat|Document)|$)'
-    numbered_matches = re.findall(numbered_pattern, part_ii)
+    # Find all Intabulare blocks with their content
+    # Pattern: B\d+ ... Intabulare ... owners ... until next B\d+ or end
+    intabulare_blocks = list(re.finditer(
+        r'B(\d+)\s+(?:Intabulare|intabulare)',
+        part_ii
+    ))
     
-    for match in numbered_matches:
-        clean_name = match.strip()
-        # Clean up trailing commas, "domeniu privat", etc.
-        clean_name = re.sub(r',\s*domeniu\s+privat\s*$', '', clean_name, flags=re.IGNORECASE)
-        clean_name = re.sub(r',\s*$', '', clean_name)
-        clean_name = clean_name.strip()
+    for idx, ib_match in enumerate(intabulare_blocks):
+        b_num = ib_match.group(1)
+        start = ib_match.start()
         
-        # Skip if it's just reference text
-        if len(clean_name) > 2 and "INTABULARE" not in clean_name.upper() and "DREPT DE" not in clean_name.upper():
-            if clean_name not in owners:
-                owners.append(clean_name)
+        # Find end of this block (next B-block or end of Part II)
+        if idx + 1 < len(intabulare_blocks):
+            end = intabulare_blocks[idx + 1].start()
+        else:
+            # Find next major section marker
+            next_section = re.search(r'\n(?:B\d+\s)', part_ii[ib_match.end():])
+            if next_section:
+                end = ib_match.end() + next_section.start()
+            else:
+                end = len(part_ii)
+        
+        block = part_ii[start:end]
+        
+        # Skip blocks that are "se noteaza" (notes, not ownership)
+        if re.search(r'B\d+\s+se\s+noteaza', block, re.IGNORECASE):
+            continue
+        
+        # Skip SERVITUTE blocks
+        if 'SERVITUTE' in block.upper():
+            continue
+        
+        # Check if this block has been radiata (cancelled)
+        if re.search(r'Radiat[a|ă]?\s+prin', block, re.IGNORECASE):
+            continue
+        
+        # Check cota - skip blocks with cota actuala 0/1 (transferred ownership)
+        cota_match = re.search(r'cota\s+actuala\s+(\d+/\d+)', block, re.IGNORECASE)
+        if cota_match and cota_match.group(1) == '0/1':
+            continue
+        
+        # Extract numbered owners from this block: 1) NAME, 2) NAME, etc.
+        block_owners = []
+        owner_matches = re.finditer(
+            r'(\d+)\)\s*([A-Za-z][A-Za-z\s\.\,\-\"\'\(\)]+?)(?=\n\d+\)|\n\d{4,6}\s*/|\n(?:Act|OBSERV|B\d|A\d|Radiat|Document|se\s+noteaz)|\Z)',
+            block
+        )
+        
+        for om in owner_matches:
+            clean_name = om.group(2).strip()
+            # Clean up trailing info
+            clean_name = re.sub(r',\s*(?:casatorit|necasatorit|ca\s+bun|bun\s+comun|bun\s+propriu|domeniu\s+privat).*$', '', clean_name, flags=re.IGNORECASE)
+            clean_name = re.sub(r',\s*$', '', clean_name).strip()
+            
+            if len(clean_name) > 2 and "INTABULARE" not in clean_name.upper() and "DREPT DE" not in clean_name.upper():
+                if clean_name not in block_owners:
+                    block_owners.append(clean_name)
+        
+        if block_owners:
+            best_owners = block_owners
+            if cota_match:
+                best_cota = cota_match.group(1)
+            else:
+                # Try to find cota anywhere in block
+                any_cota = re.search(r'cota\s+(?:actuala\s+)?(\d+/\d+)', block, re.IGNORECASE)
+                if any_cota:
+                    best_cota = any_cota.group(1)
     
-    # Pattern 2: Special entities - STATE, AGENCIES, etc.
+    owners = best_owners
+    
+    # === FALLBACK PATTERNS (if no Intabulare blocks found owners) ===
+    
+    # Fallback 1: Simple numbered pattern anywhere in Part II
+    if not owners:
+        numbered_matches = re.finditer(
+            r'(\d+)\)\s*([A-Za-z][A-Za-z\s\.\,\-\"\'\(\)]+?)(?=\n\d+\)|\n\d{4,6}\s*/|\n(?:Act|OBSERV|B\d|A\d|Radiat|Document)|\Z)',
+            part_ii
+        )
+        for om in numbered_matches:
+            clean_name = om.group(2).strip()
+            clean_name = re.sub(r',\s*(?:casatorit|necasatorit|ca\s+bun|bun\s+comun|bun\s+propriu|domeniu\s+privat).*$', '', clean_name, flags=re.IGNORECASE)
+            clean_name = re.sub(r',\s*$', '', clean_name).strip()
+            if len(clean_name) > 2 and "INTABULARE" not in clean_name.upper() and "DREPT DE" not in clean_name.upper():
+                if clean_name not in owners:
+                    owners.append(clean_name)
+    
+    # Fallback 2: Special entities - STATE, AGENCIES, etc.
     if not owners:
         state_patterns = [
             r'(STATUL\s+ROMAN)',
@@ -93,39 +169,41 @@ def extract_owner_details(text: str) -> Tuple[str, str, str, str]:
                 owners.append(match.group(1).strip())
                 break
     
-    # Pattern 3: Companies (S.A., S.R.L.)
+    # Fallback 3: Companies (S.A., S.R.L.) — require word boundary on SA/SRL to avoid false matches
     if not owners:
-        company_match = re.search(r'(?:S\.C\.\s*)?([A-ZĂÂÎȘȚa-zăâîșț\s\.\-]+(?:S\.A\.|S\.R\.L\.|SA|SRL))', part_ii)
+        company_match = re.search(r'(?:S\.C\.\s*)?([A-ZĂÂÎȘȚa-zăâîșț\s\.\-]+(?:S\.A\.|S\.R\.L\.|\bSA\b|\bSRL\b))', part_ii)
         if company_match:
-            owners.append(company_match.group(1).strip())
+            name = company_match.group(1).strip()
+            if len(name) > 3:  # Must be more than just "SA"
+                owners.append(name)
     
-    # Pattern 4: Municipalities
+    # Fallback 4: Municipalities
     if not owners:
-        muni_match = re.search(r'((?:MUNICIPIUL|JUDEȚUL|COMUNA|ORAȘUL|Municipiul|Județul|Comuna|Orașul)\s+[A-ZĂÂÎȘȚa-zăâîșț]+)', part_ii)
+        muni_match = re.search(r'((?:MUNICIPIUL|JUDETUL|COMUNA|ORASUL|Municipiul|Judetul|Comuna|Orasul)\s+[A-Za-z]+)', part_ii)
         if muni_match:
             owners.append(muni_match.group(1).strip())
     
-    # Pattern 5: Search in full text for MUNICIPIUL with uppercase city name
+    # Fallback 5: Search in full text for MUNICIPIUL with uppercase city name
     if not owners:
-        muni_full = re.search(r'((?:MUNICIPIUL|JUDEȚUL|COMUNA|ORAȘUL)\s+[A-ZĂÂÎȘȚ]+)', text)
+        muni_full = re.search(r'((?:MUNICIPIUL|JUDETUL|COMUNA|ORASUL)\s+[A-Z]+)', text)
         if muni_full:
             owners.append(muni_full.group(1).strip())
     
-    # Pattern 6: Person names - UPPERCASE format "LASTNAME FIRSTNAME"
+    # Fallback 6: Person names - UPPERCASE format "LASTNAME FIRSTNAME"
     if not owners:
-        # Look for typical Romanian person names after 1)
-        person_pattern = r'1\)\s*([A-ZĂÂÎȘȚ][A-ZĂÂÎȘȚ\-]+\s+[A-ZĂÂÎȘȚ][A-ZĂÂÎȘȚa-zăâîșț\-]+)'
+        person_pattern = r'1\)\s*([A-Z][A-Z\-]+\s+[A-Z][A-Za-z\-]+)'
         person_match = re.search(person_pattern, part_ii)
         if person_match:
             owners.append(person_match.group(1).strip())
     
-    owner_str = " & ".join(owners[:2]) if owners else "Nedetectat"
+    owner_str = " & ".join(owners[:3]) if owners else "Nedetectat"
 
-    # 2. Extract Cota
-    cota = ""
-    cota_match = re.search(r"cota\s+(?:actuala\s+)?(\d+/\d+)", part_ii, re.IGNORECASE)
-    if cota_match:
-        cota = cota_match.group(1)
+    # 2. Extract Cota (use best_cota from block analysis, or find in whole section)
+    cota = best_cota
+    if not cota:
+        cota_match = re.search(r"cota\s+(?:actuala\s+)?(\d+/\d+)", part_ii, re.IGNORECASE)
+        if cota_match:
+            cota = cota_match.group(1)
 
     # 3. Extract Acquisition Mode
     mod = ""
@@ -182,7 +260,7 @@ def extract_owner_history(part_ii: str) -> str:
         
         # Find numbered owners: 1), 2), 3), etc.
         owner_matches = re.findall(
-            r'(\d+)\)\s*([A-ZĂÂÎȘȚŢŞa-zăâîșțţş][A-ZĂÂÎȘȚŢŞa-zăâîșțţş\s\.\,\-\"\'\(\)]+?)(?=\n(?:\d+\)|Act|OBSERV|B\d|A\d|Document|se\s+noteaza)|$)',
+            r'(\d+)\)\s*([A-Za-z][A-Za-z\s\.\,\-\"\'\(\)]+?)(?=\n(?:\d+\)|Act|OBSERV|B\d|A\d|Document|se\s+noteaza)|\n\d{4,6}\s*/|\Z)',
             block_content
         )
         
